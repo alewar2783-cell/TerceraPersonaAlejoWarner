@@ -1,185 +1,149 @@
+using System.Collections;
 using UnityEngine;
-using UnityEngine.UI;
-using TMPro;
-using UnityEngine.SceneManagement;
-
-
 
 [RequireComponent(typeof(Rigidbody))]
 public class Personaje : MonoBehaviour
 {
-    [Tooltip("Fuerza")]
-    [SerializeField] private float Speed = 5f;
-    [Tooltip("Salto")]
-    [SerializeField] private float jumpForce = 10f;
-    [Tooltip("Radio Check Piso")]
-    [SerializeField] private float groundCheckRadius = 0.3f;
-    [Tooltip("Capa Piso")]
+    [Header("Movimiento")]
+    [SerializeField] private float moveForce = 15f;
+    [SerializeField] private float maxSpeed = 15f;
+
+    [Header("Salto")]
+    [SerializeField] private float jumpForce = 5f;
+    [SerializeField, Tooltip("Punto de chequeo en la base del personaje")]
+    private Transform groundCheckPoint;
+    [SerializeField] private float groundCheckRadius = 0.5f;
     [SerializeField] private LayerMask groundLayer;
-    [SerializeField] private LayerMask climbWall;
-    [Header("UI Elements")]
-    [SerializeField] private TextMeshProUGUI scoreText;
-    [SerializeField] private GameObject winPanel;
+    [SerializeField] private Transform cameraTransform;
 
-    private int totalCollectibles = 0;
-    private int score = 0;
-    private Rigidbody playerRigidbody;
-    public GameObject Objeto;
-    public GameObject[] collectibles;
-    bool IsGrounded = false;    
+    [Header("Coleccionables y PowerUps")]
+    [SerializeField] private float powerUpJumpBoost = 10f;
+    [SerializeField] private float powerUpDuration = 5f;
+    [SerializeField] private float respawnTime = 30f;
+    [SerializeField] private int scorePerCollectible = 1;
 
+    private Rigidbody rb;
+    private float originalJumpForce;
+    private int score;
+    private Coroutine activePowerUp;
 
     private void Awake()
     {
-        playerRigidbody = GetComponent<Rigidbody>();
-    }
-    private void Start()
-    {
-        Time.timeScale = 1f;
-        collectibles = GameObject.FindGameObjectsWithTag("Collectible");
-        foreach (GameObject collectible in collectibles)
-        {
-            if (collectible != null)
-            {
-                totalCollectibles += collectible.GetComponent<Collectable>().scoreValue;
-            }
-        }
-        winPanel.SetActive(false);
-        UpdateUI();
-    }
+        rb = GetComponent<Rigidbody>();
+        originalJumpForce = jumpForce;
 
+        if (groundCheckPoint == null)
+        {
+            Transform t = transform.Find("GroundCheck");
+            if (t != null) groundCheckPoint = t;
+        }
+    }
 
     private void FixedUpdate()
     {
         HandleMovement();
     }
 
-    [SerializeField] private Transform cameraTransform; // C�mara a seguir
+    private void Update()
+    {
+        HandleJumpInput();
+    }
 
+    // === MOVIMIENTO ===
     private void HandleMovement()
     {
         float horizontal = Input.GetAxis("Horizontal");
         float vertical = Input.GetAxis("Vertical");
-
         Vector3 inputDirection = new Vector3(horizontal, 0f, vertical).normalized;
 
         if (inputDirection.magnitude >= 0.1f)
         {
-            // Direcci�n relativa a la c�mara
             Vector3 cameraForward = cameraTransform.forward;
             Vector3 cameraRight = cameraTransform.right;
-
             cameraForward.y = 0f;
             cameraRight.y = 0f;
-
             cameraForward.Normalize();
             cameraRight.Normalize();
 
             Vector3 moveDirection = cameraForward * vertical + cameraRight * horizontal;
-            moveDirection.Normalize();
+            rb.AddForce(moveDirection * moveForce);
 
-            // Movimiento con velocidad directa
-            Vector3 velocity = moveDirection * Speed;
-            velocity.y = playerRigidbody.linearVelocity.y; // Manten� la velocidad vertical (para salto)
-            playerRigidbody.linearVelocity = velocity;
+            // Limitar velocidad
+            Vector3 flatVelocity = new Vector3(rb.linearVelocity.x, 0, rb.linearVelocity.z);
+            if (flatVelocity.magnitude > maxSpeed)
+            {
+                Vector3 limitedVelocity = flatVelocity.normalized * maxSpeed;
+                rb.linearVelocity = new Vector3(limitedVelocity.x, rb.linearVelocity.y, limitedVelocity.z);
+            }
 
-            // (Opcional) Rotar el personaje hacia la direcci�n del movimiento
+            // Rotar personaje hacia dirección del movimiento
             Quaternion targetRotation = Quaternion.LookRotation(moveDirection);
             transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, Time.deltaTime * 10f);
         }
-        else
-        {
-            // Si no hay input, mantenemos la velocidad vertical pero detenemos horizontal
-            Vector3 velocity = new Vector3(0, playerRigidbody.linearVelocity.y, 0);
-            playerRigidbody.linearVelocity = velocity;
-        }
     }
 
-
-
-    private void OnCollisionEnter(Collision collision)
+    // === SALTO ===
+    private void HandleJumpInput()
     {
-        if (collision.gameObject.CompareTag("Ground"))
+        if (Input.GetKeyDown(KeyCode.Space) && IsGrounded())
         {
-            IsGrounded = true;
+            rb.AddForce(Vector3.up * jumpForce, ForceMode.Impulse);
+            Debug.Log("Salto ejecutado");
         }
     }
 
+    private bool IsGrounded()
+    {
+        Vector3 checkPos = groundCheckPoint ? groundCheckPoint.position : transform.position;
+        return Physics.CheckSphere(checkPos, groundCheckRadius, groundLayer, QueryTriggerInteraction.Ignore);
+    }
+
+    // === COLISIONES ===
     private void OnTriggerEnter(Collider other)
     {
         if (other.CompareTag("Collectible"))
         {
-            CollectItem(other);
+            score += scorePerCollectible;
+            Debug.Log($"Coleccionable recogido. Puntuación actual: {score}");
+            StartCoroutine(RespawnObject(other.gameObject, respawnTime));
         }
-        if (other.CompareTag("PowerUp"))
+        else if (other.CompareTag("PowerUp"))
         {
-            PowerUpCollected(other);
+            ApplyPowerUp(powerUpJumpBoost, powerUpDuration);
+            Debug.Log("PowerUp activado: salto mejorado temporalmente");
+            StartCoroutine(RespawnObject(other.gameObject, respawnTime));
         }
     }
-    private void PowerUpCollected(Collider other)
-    {
-        float newJumpForce = other.GetComponent<PowerUp>().jumpForce;
-        float powerUpDuration = other.GetComponent<PowerUp>().duration;
 
+    // === POWER UP ===
+    private void ApplyPowerUp(float newJumpForce, float duration)
+    {
+        if (activePowerUp != null) StopCoroutine(activePowerUp);
+        activePowerUp = StartCoroutine(PowerUpCoroutine(newJumpForce, duration));
+    }
+
+    private IEnumerator PowerUpCoroutine(float newJumpForce, float duration)
+    {
         jumpForce = newJumpForce;
-
-        Destroy(other.gameObject);
-
-        Invoke("PowerUpEnd", powerUpDuration);
-
+        yield return new WaitForSeconds(duration);
+        jumpForce = originalJumpForce;
+        activePowerUp = null;
+        Debug.Log("PowerUp finalizado. Salto restaurado.");
     }
 
-    private void PowerUpEnd()
+    // === RESPAWN ===
+    private IEnumerator RespawnObject(GameObject obj, float delay)
     {
-        jumpForce = 5f;
+        obj.SetActive(false);
+        yield return new WaitForSeconds(delay);
+        obj.SetActive(true);
     }
 
-    private void CollectItem(Collider other)
-    {
-        Collectable collectedItem = other.GetComponent<Collectable>();
-        score += collectedItem.scoreValue;
-        UpdateUI();
-        Destroy(other.gameObject);
-
-        if (score >= totalCollectibles)
-        {
-            Win();
-        }
-    }
-
-    private void Win()
-    {
-        winPanel.SetActive(true);
-        Time.timeScale = 0f;
-    }
-
-    private void UpdateUI()
-    {
-        scoreText.text = "Puntos: " + score.ToString() + " / " + totalCollectibles.ToString();
-    }
-
+    // === DEBUG VISUAL ===
     private void OnDrawGizmos()
     {
         Gizmos.color = Color.red;
-        Gizmos.DrawWireSphere(transform.position, groundCheckRadius);
-    }
-
-    public void PlayAgain()
-    {
-        SceneManager.LoadScene(1);
-    }
-
-    private void Update()
-    {
-        HandleJump();
-    }
-
-    private void HandleJump()
-    {
-        if (Input.GetKeyDown(KeyCode.Space) && IsGrounded)
-        {
-            playerRigidbody.AddForce(Vector3.up * jumpForce, ForceMode.Impulse);
-            IsGrounded = false; // Evita dobles saltos
-        }
+        Vector3 pos = groundCheckPoint ? groundCheckPoint.position : transform.position;
+        Gizmos.DrawWireSphere(pos, groundCheckRadius);
     }
 }
