@@ -1,5 +1,6 @@
 using System.Collections;
 using UnityEngine;
+using TMPro;
 
 [RequireComponent(typeof(Rigidbody))]
 public class Personaje : MonoBehaviour
@@ -19,8 +20,15 @@ public class Personaje : MonoBehaviour
     [Header("Coleccionables y PowerUps")]
     [SerializeField] private float powerUpJumpBoost = 10f;
     [SerializeField] private float powerUpDuration = 5f;
-    [SerializeField] private float respawnTime = 30f;
     [SerializeField] private int scorePerCollectible = 1;
+    [SerializeField] private int maxScore = 15;
+
+    [Header("UI")]
+    [SerializeField] private TextMeshProUGUI scoreText;
+    [SerializeField] private TextMeshProUGUI powerUpText;
+    [SerializeField] private GameObject winPanel;
+    [SerializeField] private TextMeshProUGUI winMessageText;
+
 
     private Rigidbody rb;
     private float originalJumpForce;
@@ -29,6 +37,8 @@ public class Personaje : MonoBehaviour
 
     private void Awake()
     {
+        winPanel.SetActive(false);
+
         rb = GetComponent<Rigidbody>();
         originalJumpForce = jumpForce;
 
@@ -37,6 +47,11 @@ public class Personaje : MonoBehaviour
             Transform t = transform.Find("GroundCheck");
             if (t != null) groundCheckPoint = t;
         }
+
+        UpdateScoreUI();
+
+        if (powerUpText != null)
+            powerUpText.gameObject.SetActive(false);
     }
 
     private void FixedUpdate()
@@ -49,7 +64,7 @@ public class Personaje : MonoBehaviour
         HandleJumpInput();
     }
 
-    // === MOVIMIENTO ===
+    
     private void HandleMovement()
     {
         float horizontal = Input.GetAxis("Horizontal");
@@ -68,7 +83,7 @@ public class Personaje : MonoBehaviour
             Vector3 moveDirection = cameraForward * vertical + cameraRight * horizontal;
             rb.AddForce(moveDirection * moveForce);
 
-            // Limitar velocidad
+           
             Vector3 flatVelocity = new Vector3(rb.linearVelocity.x, 0, rb.linearVelocity.z);
             if (flatVelocity.magnitude > maxSpeed)
             {
@@ -76,13 +91,13 @@ public class Personaje : MonoBehaviour
                 rb.linearVelocity = new Vector3(limitedVelocity.x, rb.linearVelocity.y, limitedVelocity.z);
             }
 
-            // Rotar personaje hacia dirección del movimiento
+            
             Quaternion targetRotation = Quaternion.LookRotation(moveDirection);
             transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, Time.deltaTime * 10f);
         }
     }
 
-    // === SALTO ===
+    
     private void HandleJumpInput()
     {
         if (Input.GetKeyDown(KeyCode.Space) && IsGrounded())
@@ -98,24 +113,29 @@ public class Personaje : MonoBehaviour
         return Physics.CheckSphere(checkPos, groundCheckRadius, groundLayer, QueryTriggerInteraction.Ignore);
     }
 
-    // === COLISIONES ===
+ 
     private void OnTriggerEnter(Collider other)
     {
         if (other.CompareTag("Collectible"))
         {
             score += scorePerCollectible;
+            UpdateScoreUI();
             Debug.Log($"Coleccionable recogido. Puntuación actual: {score}");
-            StartCoroutine(RespawnObject(other.gameObject, respawnTime));
+
+            
+            Destroy(other.gameObject);
         }
         else if (other.CompareTag("PowerUp"))
         {
             ApplyPowerUp(powerUpJumpBoost, powerUpDuration);
             Debug.Log("PowerUp activado: salto mejorado temporalmente");
-            StartCoroutine(RespawnObject(other.gameObject, respawnTime));
+
+           
+            Destroy(other.gameObject);
         }
     }
 
-    // === POWER UP ===
+    
     private void ApplyPowerUp(float newJumpForce, float duration)
     {
         if (activePowerUp != null) StopCoroutine(activePowerUp);
@@ -125,25 +145,56 @@ public class Personaje : MonoBehaviour
     private IEnumerator PowerUpCoroutine(float newJumpForce, float duration)
     {
         jumpForce = newJumpForce;
-        yield return new WaitForSeconds(duration);
+
+        if (powerUpText != null)
+        {
+            powerUpText.gameObject.SetActive(true);
+        }
+
+        float timer = duration;
+        while (timer > 0)
+        {
+            timer -= Time.deltaTime;
+            if (powerUpText != null)
+                powerUpText.text = $"Power-Up activo ({timer:F1}s)";
+            yield return null;
+        }
+
+        if (powerUpText != null)
+            powerUpText.gameObject.SetActive(false);
+
         jumpForce = originalJumpForce;
         activePowerUp = null;
         Debug.Log("PowerUp finalizado. Salto restaurado.");
     }
 
-    // === RESPAWN ===
-    private IEnumerator RespawnObject(GameObject obj, float delay)
+    
+    private void UpdateScoreUI()
     {
-        obj.SetActive(false);
-        yield return new WaitForSeconds(delay);
-        obj.SetActive(true);
+        if (scoreText != null)
+            scoreText.text = $"Puntos: {score} / {maxScore}";
     }
 
-    // === DEBUG VISUAL ===
+    
     private void OnDrawGizmos()
     {
         Gizmos.color = Color.red;
         Vector3 pos = groundCheckPoint ? groundCheckPoint.position : transform.position;
         Gizmos.DrawWireSphere(pos, groundCheckRadius);
     }
+
+    private void LateUpdate()
+    {
+        if (score >= maxScore)
+        {
+            if (winPanel != null)
+            {
+                winPanel.SetActive(true);
+                if (winMessageText != null)
+                    winMessageText.text = "¡Ganaste!";
+                Time.timeScale = 0f;
+            }
+        }
+    }
+
 }
